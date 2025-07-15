@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import Qdrant
+from langchain_qdrant import Qdrant
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.tools import DuckDuckGoSearchRun
 
@@ -113,10 +113,12 @@ def retrieve_chunks(query: str, top_k: int = 5, score_threshold: float = 0.4) ->
         embeddings=embedding_model,
     )
 
-    docs_with_scores = qdrant.max_marginal_relevance_search_with_score(
-        query=query,
+    embedded_query = embedding_model.embed_query(query)
+
+    docs_with_scores = qdrant.max_marginal_relevance_search_by_vector(
+        embedding=embedded_query,
         k=top_k,
-        fetch_k=top_k * 2,
+        fetch_k= top_k * 2,
         lambda_mult=0.6,
     )
 
@@ -131,6 +133,14 @@ def retrieve_chunks(query: str, top_k: int = 5, score_threshold: float = 0.4) ->
             "chunk_id": doc.metadata.get("chunk_id", -1)
         })
     return chunks, max_score
+
+
+def extract_llm_response(response) -> str:
+    """Extract text from llama-cpp-python response"""
+    if isinstance(response, dict):
+        return response.get("choices", [{}])[0].get("text", "").strip()
+    else:
+        return str(response).strip()
 
 # ----------------------------
 # Query Decomposition with Local LLM
@@ -150,7 +160,8 @@ Please provide exactly 2 sub-questions in the following format:
 Sub-questions:"""
 
     response = llm(prompt, max_tokens=200, temperature=0.3, stop=["Sub-questions:", "\n\n"])
-    
+    response = extract_llm_response(response)
+
     # Parse the response to extract sub-questions
     lines = response.strip().split('\n')
     sub_questions = []
@@ -195,8 +206,8 @@ Please provide a clear, accurate answer based on the context above. If the conte
 
 Answer:"""
 
-    response = llm(prompt, max_tokens=500, temperature=0.2)
-    return response.strip()
+    response = llm(prompt, max_tokens=300, temperature=0.2)
+    return extract_llm_response(response)
 
 def generate_web_answer(question: str, web_content: str) -> str:
     prompt = f"""You are a helpful assistant that answers questions based on web search results.
@@ -211,7 +222,7 @@ Please provide a clear, accurate answer based on the web search results above.
 Answer:"""
 
     response = llm(prompt, max_tokens=500, temperature=0.2)
-    return response.strip()
+    return extract_llm_response(response)
 
 # ----------------------------
 # Full Corrective RAG Flow
@@ -261,4 +272,4 @@ Based on all the information above, provide a comprehensive, well-structured fin
 Final Answer:"""
 
     final_response = llm(final_prompt, max_tokens=500, temperature=0.3)
-    return final_response.strip()
+    return extract_llm_response(final_response)
